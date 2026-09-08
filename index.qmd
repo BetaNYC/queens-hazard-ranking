@@ -1,5 +1,5 @@
 ---
-title: "Example RADAR Report"
+title: "Queens Hazard Ranking"
 format: 
   html:
     code-fold: true
@@ -7,7 +7,7 @@ format:
 
 ```{r}
 #| label: setup
-#| include: true
+#| include: false
 #| warning: false
 #| message: false
 
@@ -20,7 +20,9 @@ reqd_pkgs <- c("flextable",
                "tidyverse",
                "mapgl",
                "htmltools",
-               "officer")
+               "officer",
+               "socratadata",
+               "forcats")
 
 install.packages(
   setdiff(
@@ -34,7 +36,7 @@ lapply(reqd_pkgs, library, character.only = TRUE) |>
   invisible()
 
 # If needed, ensure that the Quarto render and RStudio read the same environment vars
-# readRenviron(".Renviron")
+readRenviron(".Renviron")
 
 set_flextable_defaults(
   font.family  = "Authentic Sans",
@@ -50,13 +52,46 @@ set_flextable_defaults(
 # Wraps a data frame in a CIL-styled flextable ready to embed in the page.
 # Columns size to their content by default. `widths` overrides that: one value
 # per column, or named values setting just those columns. `max_width` caps the
-# fitted widths, never the ones `widths` names.
+# fitted widths, never the ones `widths` names. `full_height = TRUE` drops the
+# 400px cap so the whole table renders inline without a vertical scrollbar.
+# `unit = "%"` reads `widths` as shares of a full-width table instead of
+# absolute sizes, which is how two tables are given matching columns.
 # Usage: data |> cil_table(widths = c("Purpose of Funds" = 4))
+#        data |> cil_table(widths = c(39, 61), unit = "%")
 cil_table <- function(data, widths = NULL, heights = NULL,
-                      max_width = NULL, unit = "in", full_width = TRUE) {
+                      max_width = NULL, unit = "in", full_width = TRUE,
+                      full_height = FALSE) {
   ft <- flextable(data)
-  fitted <- !(is.null(widths) && is.null(max_width))
-  
+  pct <- identical(unit, "%")
+  # Percentages never reach flextable, so they don't take the fitted path below.
+  fitted <- !pct && !(is.null(widths) && is.null(max_width))
+
+  if (pct) {
+    if (is.null(widths)) {
+      stop("`unit = \"%\"` sets column shares, so it needs `widths`.", call. = FALSE)
+    }
+    if (!is.null(max_width)) {
+      stop("`max_width` caps fitted widths in absolute units; `unit = \"%\"` ",
+           "sets shares outright. Use one or the other.", call. = FALSE)
+    }
+    if (!full_width) {
+      stop("Percentage widths are shares of a full-width table. Leave ",
+           "`full_width = TRUE`.", call. = FALSE)
+    }
+    if (!is.null(heights)) {
+      # `unit` covers heights too, and a row can't be a percentage of anything.
+      stop("`heights` needs an absolute unit, which `unit = \"%\"` overrides. ",
+           "Set column shares and row heights in separate calls.", call. = FALSE)
+    }
+    if (length(widths) != ncol(data)) {
+      # Named subsets work for absolute widths because dim_pretty() supplies a
+      # baseline for the columns left out. Shares have no such baseline.
+      stop("`widths` has ", length(widths), " value(s) but `data` has ",
+           ncol(data), " column(s). Percentage widths need one per column.",
+           call. = FALSE)
+    }
+  }
+
   if (fitted && full_width) {
     stop("`full_width` stretches columns to the container; `widths`/`max_width` ",
          "pin them. Use one or the other.", call. = FALSE)
@@ -97,11 +132,27 @@ cil_table <- function(data, widths = NULL, heights = NULL,
     ft <- hrule(ft, rule = "exact", part = "body")
   }
 
+  # flextable's width() speaks only in/cm/mm, and autofit emits no column widths
+  # at all, so shares are carried by markup instead: a <colgroup> the browser
+  # obeys once .scroll-output--pct switches the table to `table-layout: fixed`.
+  # Empty otherwise, leaving the sub() below a no-op.
+  colgroup <- if (pct) {
+    paste0("<colgroup>",
+           paste0(sprintf('<col style="width:%s%%;">', widths), collapse = ""),
+           "</colgroup>")
+  } else ""
+
   ft |>
     border_remove() |>
     bold(bold = TRUE, part = "header") |>
     hline(border = fp_border(color = "#0b0b0b", width = 1.5),  part = "header") |>
     hline(border = fp_border(color = "#969696", width = 0.75), part = "body") |>
+    # hline() mirrors each rule onto the next row's top edge as well as the
+    # current row's bottom. Under the `border-collapse: separate` these tables
+    # need for sticky headers, the two edges stack instead of merging, so every
+    # interior rule renders at double weight -- only the final one, with no row
+    # below it, looks right. Clearing the tops leaves a single 0.75pt line.
+    border(border.top = fp_border(width = 0), part = "body") |>
     padding(
       padding.top = 0, padding.bottom = 4,
       padding.left = 0, padding.right = 16,
@@ -113,121 +164,248 @@ cil_table <- function(data, widths = NULL, heights = NULL,
     htmltools_value(ft.shadow = FALSE) |>
     as.character() |>
     sub(pattern = 'class="tabwid"', replacement = 'class="cil-tabwid"', fixed = TRUE) |>
+    sub(pattern = "(<table[^>]*>)", replacement = paste0("\\1", colgroup)) |>
     HTML() |>
-    div(class = if (fitted) "scroll-output scroll-output--fit" else "scroll-output")
+    div(class = paste(
+      c("scroll-output",
+        if (fitted) "scroll-output--fit",
+        if (pct) "scroll-output--pct",
+        if (full_height) "scroll-output--full"),
+      collapse = " "
+    ))
 }
 
 ```
+# Hazard Categories
 
-This branch is for a brief RADAR report example that includes examples of typical elements:
+The Queens Resource Map will display ranked hazard-related preparedness and recovery resources and messaging at the Community District Tabulation Area (CDTA) level. 
 
-* Code blocks
-* Inline code
-* Hyperlinks 
-* Graphs
-* Interactive maps
-* Block quotes
-
-The code block above contains per-block rendering options, denoted by `#|`. Look, code formatting! Required packages are then written to a character vector `reqd_pkgs` which is used to compare against already-installed R packages using the `setdiff()` function.
-
-Once packages are installed, they may be used by calling the `library()` function. The common packages used here are:
-
-* `flextable`: used for tables, flexible and extensible, hence the name
-* `sf`: the standard package for geospatial work in R -- introduces spatial objects and operations
-* `tidyverse`: a collection of packages used for working with data, all centered around the [tidy]("https://vita.had.co.nz/papers/tidy-data.pdf") framework
-* `mapgl`: an R implementation of the two common OpenGL-based map frameworks, Mapbox GL JS and MapLibre GL JS
-
-Let's set up some elements using the built-in datasets that come with R and the above packages.
-
-To render the report as `docs/index.html`, run `quarto render index.qmd` from the command line in the repo root.
-
-One of the packages in `tidyverse` is the popular `ggplot2`, used to create data analysis graphics using the "Grammar of Graphics". A useful reference is the online book [ggplot2: Elegant Graphics for Data Analysis (3e)]("https://ggplot2-book.org/"), which was made with Quarto!
-
-The number of diamonds by color and cut in the built in `diamonds` data set can be visualized using a stacked bar chart. We'll define the category color manually:
+Our hazard categorization is based on New York City's 2024 Jurisdictional Risk Assessment[^1] report. The 2024 report uses the Pennsylvania Public Health Risk Assessment Tool (PHRAT) model in order to develop a "Planning Priority Score" used to suggest where New York City should focus its resources and planning efforts. The ten categories defined by the 2024 JRA report and their rank are: 
 
 ```{r}
-#| out-width: 100%
-#| code-fold: false
+#| echo: false
 
-ggplot(data = diamonds,
-       aes(color, fill = cut)) +
-  geom_bar() + 
-  xlab("Color Category") +
-  ylab("Count") +
-  labs(title = "Diamonds by Color and Cut",
-       subtitle = "Source: diamonds (built-in dataset)") +
-  scale_fill_discrete(name = "Color Category",
-                      palette = c("#f1eef6",
-                                  "#bdc9e1",
-                                  "#74a9cf",
-                                  "#2b8cbe",
-                                  "#045a8d")) +
-  theme_gray(base_size = 16)
+cil_table(
+  tribble(
+    ~Rank, ~`JRA Hazard`,
+    "1", "Flooding",
+    "2", "Hazardous Materials Release",
+    "3", "Pandemic",
+    "4", "Infectious Disease Outbreak",
+    "5", "Coastal Storm",
+    "6", "Mass Casualty Event",
+    "7", "Chemical Threats",
+    "8", "Temperature Extremes",
+    "9", "Utility Interruption",
+    "10", "Cyberattack"
+  ),
+  widths = c(39, 61),
+  unit = "%",
+  full_height = TRUE
+)
 ```
 
-Virtually every element of a `ggplot` graphic can be modified. Let's say we want to remove the panel shading, leaving only y-axis major grid lines in a light grey, and update the text color to a softer black:
+Our intended user is a New Yorker concerned about an imminent threat, rather than a municpal agency or staffer. To support this use case, we've modified the hazard categorization accordingly:
 
 ```{r}
-#| out-width: 100%
-#| code-fold: false
+#| echo: false
 
-ggplot(data = diamonds,
-       aes(color, fill = cut)) +
-  geom_bar() + 
-  xlab("Color Category") +
-  ylab("Count") +
-  labs(title = "Diamonds by Color and Cut",
-       subtitle = "Source: diamonds (built-in dataset)") +
-  scale_fill_discrete(name = "Color Category",
-                      palette = c("#f1eef6",
-                                  "#bdc9e1",
-                                  "#74a9cf",
-                                  "#2b8cbe",
-                                  "#045a8d")) +
-  scale_y_continuous( breaks = seq(0, 30000, by = 5000)) +
-  theme_gray(base_size = 16) +
-  theme(
-    panel.background = element_blank(),
-    panel.grid.major.y = element_line(color = "grey80"),
-    panel.grid.major.x = element_blank(),
-    panel.grid.minor.x = element_blank(),
-    axis.ticks = element_blank(),
-    text = element_text(color = "#141414"),
-    axis.text = element_text(color = "#141414")
-  )
+cil_table(
+  tribble(
+    ~`Queens Map Hazard`, ~Notes,
+    "Heavy Rain", "Added to capture non-coastal stormwater flooding",
+    "Coastal Storm", "",
+    "Extreme Heat", "Broken out from Temperature Extremes",
+    "Extreme Cold", "Broken out from Temperature Extremes",
+    "Hazmat / Chemical", "Combines Hazardous Materials Release and Chemical Threats",
+    "Mass Casualty Event / Active Shooter", "Extends Mass Casualty Event",
+    "Infectious Disease", "Combines Pandemic and Infectious Disease Outbreak",
+    "Blackout & Cyberattack (EMP)", "Combines Utility Interruption and Cyberattack"
+  ),
+  widths = c(39, 61),
+  unit = "%"
+)
 ```
 
-And so and and so on. LLMs are good with helping with the arcane little tweaks for plots.
 
-The `sf` package has a built in dataset of SIDS sample data in North Carolina. Let's use `mapgl` to take a look at area by county:
+[^1]: [Jurisdictional Risk Assessment 2024, New York City Department of Health and Mental Hygiene](https://storymaps.arcgis.com/stories/498014fede58495dae447d97c6bf1611)
+
+# Hazard Ranking
+
+## Data Sources
+Hazard ranking among Queens CDTAs requires data sources that can be used to differentiate the relative risks between districts. These data are not available for all hazards:
 
 ```{r}
+#| echo: false
+
+cil_table(
+  tribble(
+    ~`Queens Map Hazard`, ~`Data Source`,
+    "Heavy Rain", "Stormwater Flood Maps",
+    "Coastal Storm", "Current-day Storm Surge FVI",
+    "Extreme Heat", "Heat Vulnerability Index",
+    "Extreme Cold", "None available",
+    "Hazmat / Chemical", "Chemically Intensive Small Businesses\nHazardous Waste Material Storage",
+    "Mass Casualty Event / Active Shooter", "None available",
+    "Infectious Disease", "Pandemic Influenza Vulnerability Index",
+    "Blackout & Cyberattack (EMP)", "None available"
+  ),
+  full_height = TRUE,
+  widths = c(39, 61),
+  unit = "%"
+)
+```
+
+In the absence of available information at the Community District level, extreme cold, mass casualty events / active shooter incidents, and blackout & cyberattack cannot be ranked.
+
+In order to identify a suitable ranking methodology for the remaining hazards, a discussion of the disparate data is warranted. 
+
+```{r}
+#| cache: true
 #| message: false
 #| warning: false
-#| code-fold: false
-#| out-height: 800px
 
-nc <- st_read(system.file("shape/nc.shp", package="sf"),
-              quiet = TRUE)
+# Fetch data sources
 
-maplibre_view(nc, column = "AREA")
+cdta <- read_sf("https://services5.arcgis.com/GfwWNkhOj9bNBqoJ/arcgis/rest/services/NYC_Community_District_Tabulation_Areas_2020/FeatureServer/0/query?where=CDTAType=0&outFields=*&outSR=4326&f=pgeojson") |> 
+  mutate(cdtaCode = paste0(
+    BoroCode,
+    str_sub(CDTA2020, -2)
+  ))
+
+stormwater_limited <- read_sf("https://github.com/BetaNYC/q-map/releases/download/data-v4/stormwater_limited_1_77.geojson") |> st_make_valid()
+
+stormwater_moderate <- read_sf("https://github.com/BetaNYC/q-map/releases/download/data-v4/stormwater_moderate_2_13.geojson") |> 
+  st_make_valid()
+
+ss_cur_fvi <- soc_read(
+  "https://data.cityofnewyork.us/Environment/New-York-City-s-Flood-Vulnerability-Index/mrjc-v9pm.json",
+  query = soc_query(
+    select = "the_geom, GEOID, ss_cur"
+  ),
+  include_synthetic_cols = FALSE
+)
+
+hvi <- read_sf("https://services1.arcgis.com/8cuieNI8NbqQZQVJ/arcgis/rest/services/HVI_by_CDTA_CRAD_2024/FeatureServer/0/query?where=1=1&outFields=*&outSR=4326&f=pgeojson")
+
+chem_small_biz <- read_sf("https://services3.arcgis.com/A6Zjpzrub8ESZ3c7/arcgis/rest/services/Chemically%20Intensive%20Small%20Businesses_2/FeatureServer/0/query?where=1=1&outFields=*&outSR=4326&f=pgeojson")
+
+hazmat_storage <- read_sf("https://services6.arcgis.com/yG5s3afENB5iO9fj/arcgis/rest/services/EPA_RCA_Fuel_Oil_Storage/FeatureServer/0/query?where=1=1&outFields=*&outSR=4326&f=pgeojson")
+
+pivi <- read_sf("https://services1.arcgis.com/8cuieNI8NbqQZQVJ/arcgis/rest/services/Pandemic_Influenza_Vulnerability_Index/FeatureServer/0/query?where=1=1&outFields=*&outSR=4326&f=pgeojson")
+
+# Aggregate where needed
+
+## Stormwater -> CDTA
+stormwater_all <- st_union(
+  st_union(stormwater_limited),
+  st_union(stormwater_moderate)
+) |> 
+  st_transform(4326) |> 
+  st_make_valid()
+
+stormwater_pct <- cdta |> 
+  mutate(cdta_area = st_area(geometry)) |> 
+  st_intersection(stormwater_all) |> 
+  transmute(CDTA2020,
+            stormwater_pct = as.numeric(st_area(geometry) / cdta_area) * 100) |>
+  st_drop_geometry()
+
+cdta <- cdta |> 
+  left_join(stormwater_pct) |> 
+  mutate(stormwater_pct = replace_na(stormwater_pct, 0))
+
+## Tract-level FVI -> CDTA
+# Assign max FVI to CD
+ss_cur_fvi_cd <- ss_cur_fvi |> 
+  st_join(cdta |> select(CDTA2020),
+          largest = TRUE)
+
+ss_cur_fvi_cd <- ss_cur_fvi_cd |> 
+  st_drop_geometry() |> 
+  group_by(CDTA2020) |> 
+  summarize(max_ss_cur_fvi = max(ss_cur, na.rm = T))
+ 
+cdta <- cdta |> 
+  left_join(ss_cur_fvi_cd)
+
+# Hazmat storage
+cdta$hazmat_count <- lengths(st_intersects(cdta, hazmat_storage))
+
+# Join remainder
+
+## HVI
+cdta <- cdta |> 
+  left_join(hvi |> 
+              st_drop_geometry() |> 
+              select(CommDist, HVI),
+            by = join_by(cdtaCode == CommDist))
+
+## Chemically Intensive Small Business count
+cdta <- cdta |> 
+  left_join(chem_small_biz |> 
+              st_drop_geometry() |> 
+              select(BoroCD, top_3) |> 
+              mutate(BoroCD = as.character(BoroCD)) |> 
+              rename(chem_count = "top_3"),
+            by = join_by(cdtaCode == BoroCD))
+
+## PIVI
+cdta <- cdta |> 
+  left_join(pivi |> 
+              st_drop_geometry() |> 
+              select(COMMDIST, PIVI),
+            by = join_by(cdtaCode == COMMDIST))
+
+cdta <- cdta |> 
+  select(BoroCode,CDTA2020, cdtaCode, CDTAName,
+         stormwater_pct, max_ss_cur_fvi, hazmat_count, HVI, chem_count, PIVI) |> 
+  relocate(geometry, .after = last_col()) |> 
+  mutate(max_ss_cur_fvi = as.integer(max_ss_cur_fvi))
 ```
-<br/ >
-How about a table of the same information? Flextable is a little tricky in that its output is rendered as an HTML widget that generates its own HTML that gets injected into the page. To control the vertical height and overflow using `styles.css` you have to wrap the class using the `html_tools` package:
+
+## Heavy Rain
+
+The impact of heavy rain on a given Community District is taken as the percent area that experiences stormwater flooding of any kind (i.e. greater than 4 inches of flooding without sea level rise under a limited- or moderate-intensity rainfall event). Citywide, this percentage ranges from `r round(min(cdta$stormwater_pct),2)`% to `r round(max(cdta$stormwater_pct),2)`%. In Queens, the percentage ranges from `r round(min(cdta[cdta$BoroCode==4,]$stormwater_pct),2)`% to `r round(max(cdta[cdta$BoroCode==4,]$stormwater_pct),2)`%. All 59 Community Districts experience some stormwater flooding.
+
 ```{r}
-#| code-fold: FALSE
-
-nc |>
-  st_drop_geometry() |>
-  cil_table()
+ggplot(cdta) + 
+  geom_col(aes(x = fct_reorder(CDTA2020, stormwater_pct), 
+               y = stormwater_pct,
+               fill = BoroCode == 4)) +
+  geom_hline(yintercept = median(cdta$stormwater_pct),
+             linetype = "dashed", colour = "#ea4943") +
+  scale_fill_manual(values = c(`TRUE` = "#3258a3", `FALSE` = "#cedef0"),
+                    guide = "none") +
+  theme(
+    panel.background   = element_blank(),
+    panel.grid.major.x = element_blank(),
+    panel.grid.minor.x = element_blank(),
+    panel.grid.minor.y = element_line(colour = "#ebebeb"),
+    panel.grid.major.y = element_line(colour = "#ebebeb"),
+    axis.text.x = element_text(angle = 90, hjust = 1, vjust = 0.5)
+    )+
+  labs(title = "Stormwater Flood Extent in CDTAs", x = "CDTA", y = "Stormwater Flood Extent [%]") +
+  annotate("text", x = 1, y = median(cdta$stormwater_pct),
+           label = "Citywide median", colour = "#ea4943",
+           hjust = 0, vjust = -0.6, size = 3)
 ```
-<br/ >
-Here's an example citation: Kittredge (2026)[^1].
 
-[^1]: [Kittredge, Andrew P. "The Title of a Fake, Nonexistent Paper" Pretend Journal 45.3 (2026): 741-895.](https://en.wikipedia.org/wiki/Smiley#/media/File:Smiley.svg)
+Computing percentile rank in this case is straightforward:
 
-And a bit of ol Lorem ipsum:
+```{r}
+cdta <- cdta |> 
+  mutate(stormwater_pctrank = 100 * ecdf(cdta$stormwater_pct)(cdta$stormwater_pct))
 
-> Lorem ipsum dolor sit amet, consectetur adipiscing elit, sed do eiusmod tempor incididunt ut labore et dolore magna aliqua. Ut enim ad minim veniam, quis nostrud exercitation ullamco laboris nisi ut aliquip ex ea commodo consequat. Duis aute irure dolor in reprehenderit in voluptate velit esse cillum dolore eu fugiat nulla pariatur. Excepteur sint occaecat cupidatat non proident, sunt in culpa qui officia deserunt mollit anim id est laborum.
+cil_table(cdta |> 
+            st_drop_geometry() |> 
+            filter(BoroCode == 4) |>
+            select(CDTAName, stormwater_pctrank) |>
+            mutate(stormwater_pctrank = round(stormwater_pctrank, 2)) |> 
+            rename(
+              "CDTA Name" = "CDTAName",
+              "Stormwater Extent Percentile (Citywide)" = "stormwater_pctrank"
+            ),
+          full_height = TRUE) 
+```
 
-The end!
