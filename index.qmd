@@ -431,7 +431,7 @@ ggplot(cdta) +
 ## Coastal Storm
 
 The Department of Health and Mental Hygiene's Flood Vulnerability Index estimates neighborhood vulnerability to flooding by combining susceptibility to harm and capacity to recover[^3]. This project makes use of the storm surge index based on current-current day sea level. 
-CDTAs are assigned an FVI value of 1-5 based on the maximum census tract value that overlaps with the district boundary. Based on this approach, `r sum(!is.na(cdta$max_ss_cur_fvi))` of 59 NYC CDTAs are vulnerable to coastal flooding; `r sum(!is.na(cdta[cdta$BoroCode==4,]$max_ss_cur_fvi))` of `r cdta |> filter(BoroCode == 4) |> nrow()` Queens CDTAs are vulnerable to coastal flooding:
+**CDTAs are assigned an FVI value of 1-5 based on the maximum census tract value that overlaps with the district boundary.** Based on this approach, `r sum(!is.na(cdta$max_ss_cur_fvi))` of 59 NYC CDTAs are vulnerable to coastal flooding; `r sum(!is.na(cdta[cdta$BoroCode==4,]$max_ss_cur_fvi))` of `r cdta |> filter(BoroCode == 4) |> nrow()` Queens CDTAs are vulnerable to coastal flooding:
 
 ```{r}
 cil_table(cdta |> 
