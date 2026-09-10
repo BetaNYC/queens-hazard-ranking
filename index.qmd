@@ -56,11 +56,14 @@ set_flextable_defaults(
 # 400px cap so the whole table renders inline without a vertical scrollbar.
 # `unit = "%"` reads `widths` as shares of a full-width table instead of
 # absolute sizes, which is how two tables are given matching columns.
+# `fill` is a named vector of cell text -> background colour, letting a
+# category be scanned down a column by colour as well as read.
 # Usage: data |> cil_table(widths = c("Purpose of Funds" = 4))
 #        data |> cil_table(widths = c(39, 61), unit = "%")
+#        data |> cil_table(fill = c("Heavy Rain" = "#d1ddee"))
 cil_table <- function(data, widths = NULL, heights = NULL,
                       max_width = NULL, unit = "in", full_width = TRUE,
-                      full_height = FALSE) {
+                      full_height = FALSE, fill = NULL) {
   ft <- flextable(data)
   pct <- identical(unit, "%")
   # Percentages never reach flextable, so they don't take the fitted path below.
@@ -132,6 +135,21 @@ cil_table <- function(data, widths = NULL, heights = NULL,
     ft <- hrule(ft, rule = "exact", part = "body")
   }
 
+  if (!is.null(fill)) {
+    unknown <- setdiff(names(fill), unlist(lapply(data, as.character)))
+    if (length(unknown)) {
+      stop("`fill` names a value no cell holds: ", paste(unknown, collapse = ", "),
+           call. = FALSE)
+    }
+    # bg() hands the function one column at a time, so the lookup is on the cell
+    # text itself. Anything unnamed -- ids, counts -- keeps the table's own
+    # background rather than picking up a colour by accident.
+    ft <- bg(ft, part = "body", bg = function(x) {
+      matched <- fill[as.character(x)]
+      ifelse(is.na(matched), "transparent", matched)
+    })
+  }
+
   # flextable's width() speaks only in/cm/mm, and autofit emits no column widths
   # at all, so shares are carried by markup instead: a <colgroup> the browser
   # obeys once .scroll-output--pct switches the table to `table-layout: fixed`.
@@ -155,9 +173,13 @@ cil_table <- function(data, widths = NULL, heights = NULL,
     border(border.top = fp_border(width = 0), part = "body") |>
     padding(
       padding.top = 0, padding.bottom = 4,
-      padding.left = 0, padding.right = 16,
+      padding.left = 0, padding.right = 8,
       part = "header"
     ) |>
+    padding(
+      padding.left = 2, padding.right = 8,
+      part = "body"
+    ) |> 
     # Both steps are needed to keep the table out of a shadow DOM, which no page
     # CSS can reach: ft.shadow drops the static host, and the rename hides the
     # wrapper from tabwid.js, which shadow-roots every .tabwid on DOMContentLoaded.
@@ -226,11 +248,9 @@ cil_table(
   unit = "%"
 )
 ```
-
-
 [^1]: [Jurisdictional Risk Assessment 2024, New York City Department of Health and Mental Hygiene](https://storymaps.arcgis.com/stories/498014fede58495dae447d97c6bf1611)
 
-# Hazard Ranking
+# Exploratory Analysis
 
 ## Data Sources
 Hazard ranking among Queens CDTAs requires data sources that can be used to differentiate the relative risks between districts. These data are not available for all hazards:
@@ -366,17 +386,31 @@ cdta <- cdta |>
 
 ## Heavy Rain
 
-The impact of heavy rain on a given Community District is taken as the percent area that experiences stormwater flooding of any kind (i.e. greater than 4 inches of flooding without sea level rise under a limited- or moderate-intensity rainfall event). Citywide, this percentage ranges from `r round(min(cdta$stormwater_pct),2)`% to `r round(max(cdta$stormwater_pct),2)`%. In Queens, the percentage ranges from `r round(min(cdta[cdta$BoroCode==4,]$stormwater_pct),2)`% to `r round(max(cdta[cdta$BoroCode==4,]$stormwater_pct),2)`%. All 59 Community Districts experience some stormwater flooding.
+The impact of heavy rain on a given Community District is taken as the percent area that experiences stormwater flooding of any kind (i.e. greater than 4 inches of flooding without sea level rise under a limited- or moderate-intensity rainfall event)[^2]. Citywide, this percentage ranges from `r round(min(cdta$stormwater_pct),2)`% to `r round(max(cdta$stormwater_pct),2)`%. In Queens, the percentage ranges from `r round(min(cdta[cdta$BoroCode==4,]$stormwater_pct),2)`% to `r round(max(cdta[cdta$BoroCode==4,]$stormwater_pct),2)`%. All 59 Community Districts experience some stormwater flooding.
 
 ```{r}
+boro_fill <- list(
+  scale_fill_manual(
+    name   = NULL,
+    values = c(`TRUE` = "#3258a3", `FALSE` = "#cedef0"),
+    labels = c(`TRUE` = "Queens", `FALSE` = "Other Boroughs"),
+    breaks = c(TRUE, FALSE)
+  ),
+  theme(
+    legend.position      = "top",
+    legend.justification = "left",
+    legend.margin        = margin(t = 0, b = 6),
+    legend.key.size      = unit(11, "pt"),
+    legend.text          = element_text(size = 9)
+  )
+)
+
 ggplot(cdta) + 
   geom_col(aes(x = fct_reorder(CDTA2020, stormwater_pct), 
                y = stormwater_pct,
                fill = BoroCode == 4)) +
   geom_hline(yintercept = median(cdta$stormwater_pct),
              linetype = "dashed", colour = "#ea4943") +
-  scale_fill_manual(values = c(`TRUE` = "#3258a3", `FALSE` = "#cedef0"),
-                    guide = "none") +
   theme(
     panel.background   = element_blank(),
     panel.grid.major.x = element_blank(),
@@ -388,24 +422,446 @@ ggplot(cdta) +
   labs(title = "Stormwater Flood Extent in CDTAs", x = "CDTA", y = "Stormwater Flood Extent [%]") +
   annotate("text", x = 1, y = median(cdta$stormwater_pct),
            label = "Citywide median", colour = "#ea4943",
-           hjust = 0, vjust = -0.6, size = 3)
+           hjust = 0, vjust = -0.6, size = 3) +
+  boro_fill
 ```
 
-Computing percentile rank in this case is straightforward:
+[^2]: [NYC Stormwater Flood Maps](https://data.cityofnewyork.us/Environment/NYC-Stormwater-Flood-Maps/9i7c-xyvv/about_data)
+
+## Coastal Storm
+
+The Department of Health and Mental Hygiene's Flood Vulnerability Index estimates neighborhood vulnerability to flooding by combining susceptibility to harm and capacity to recover[^3]. This project makes use of the storm surge index based on current-current day sea level. 
+CDTAs are assigned an FVI value of 1-5 based on the maximum census tract value that overlaps with the district boundary. Based on this approach, `r sum(!is.na(cdta$max_ss_cur_fvi))` of 59 NYC CDTAs are vulnerable to coastal flooding; `r sum(!is.na(cdta[cdta$BoroCode==4,]$max_ss_cur_fvi))` of `r cdta |> filter(BoroCode == 4) |> nrow()` Queens CDTAs are vulnerable to coastal flooding:
 
 ```{r}
-cdta <- cdta |> 
-  mutate(stormwater_pctrank = 100 * ecdf(cdta$stormwater_pct)(cdta$stormwater_pct))
-
 cil_table(cdta |> 
             st_drop_geometry() |> 
-            filter(BoroCode == 4) |>
-            select(CDTAName, stormwater_pctrank) |>
-            mutate(stormwater_pctrank = round(stormwater_pctrank, 2)) |> 
+            filter(BoroCode == 4) |> 
+            select(CDTAName, max_ss_cur_fvi) |> 
+            mutate(max_ss_cur_fvi = as.character(max_ss_cur_fvi)) |> 
             rename(
               "CDTA Name" = "CDTAName",
-              "Stormwater Extent Percentile (Citywide)" = "stormwater_pctrank"
+              "Storm Surge FVI, 2020s" = "max_ss_cur_fvi"
             ),
-          full_height = TRUE) 
+          full_height = TRUE
+          )
 ```
 
+```{r}
+#| warning: false
+
+ggplot(cdta) + 
+  geom_col(aes(x = fct_reorder(CDTA2020, max_ss_cur_fvi, .na_rm = F, .default = -Inf), 
+               y = max_ss_cur_fvi,
+               fill = BoroCode == 4)) +
+  geom_hline(yintercept = median(cdta$max_ss_cur_fvi, na.rm = T),
+             linetype = "dashed", colour = "#ea4943") +
+  theme(
+    panel.background   = element_blank(),
+    panel.grid.major.x = element_blank(),
+    panel.grid.minor.x = element_blank(),
+    panel.grid.minor.y = element_line(colour = "#ebebeb"),
+    panel.grid.major.y = element_line(colour = "#ebebeb"),
+    axis.text.x = element_text(angle = 90, hjust = 1, vjust = 0.5)
+    )+
+  labs(title = "Flood Vulnerability Index in CDTAs",
+       subtitle = "Storm Surge, 2020s Sea Level",
+       x = "CDTA", y = "FVI [1-5]") +
+  annotate("text", x = 1, y = median(cdta$max_ss_cur_fvi, na.rm = T),
+           label = "Citywide median", colour = "#ea4943",
+           hjust = 0, vjust = -0.6, size = 3) +
+  boro_fill
+```
+
+
+[^3]: [Flood Vulnerability Index](https://a816-dohbesp.nyc.gov/IndicatorPublic/data-features/flood-vulnerability-index/)
+
+## Extreme Heat
+
+Similarly, DOHMH's Heat Vulnerability Index combines neighborhood environmental and social factors to detail the distribution of the risk of death from heat[^4]. Unlike the FVI, the HVI is released at the CDTA level, so aggregation is not necessary. 
+
+[^4]: [Heat Vulnerability Index](https://a816-dohbesp.nyc.gov/IndicatorPublic/data-features/hvi/)
+```{r}
+ggplot(cdta) + 
+  geom_col(aes(x = fct_reorder(CDTA2020, HVI), 
+               y = HVI,
+               fill = BoroCode == 4)) +
+  geom_hline(yintercept = median(cdta$HVI),
+             linetype = "dashed", colour = "#ea4943") +
+  theme(
+    panel.background   = element_blank(),
+    panel.grid.major.x = element_blank(),
+    panel.grid.minor.x = element_blank(),
+    panel.grid.minor.y = element_line(colour = "#ebebeb"),
+    panel.grid.major.y = element_line(colour = "#ebebeb"),
+    axis.text.x = element_text(angle = 90, hjust = 1, vjust = 0.5)
+    )+
+  labs(title = "Heat Vulnerability Index in CDTAs", x = "CDTA", y = "HVI [1-5]") +
+  annotate("text", x = 1, y = median(cdta$HVI),
+           label = "Citywide median", colour = "#ea4943",
+           hjust = 0, vjust = -0.6, size = 3) +
+  boro_fill
+```
+
+
+## Hazmat / Chemical
+
+Two hazmat / chemical threat data sources are referenced in the 2024 JRA report. 
+
+The first is a dataset of Chemically Intensive Small Businesses, which provides a count of these businesses per CDTA[^5]. The count ranges from `r min(cdta$chem_count)` to `r max(cdta$chem_count)` citywide; In Queens, the range is from `r min(cdta[cdta$BoroCode==4,]$chem_count)` to `r max(cdta[cdta$BoroCode==4,]$chem_count)`. Notably, `r cdta |> filter(BoroCode == 4 & chem_count > median(cdta$chem_count)) |> nrow()` of `r cdta |> filter(BoroCode == 4) |> nrow()` Queens CDTAs have more chemically intensive small businesses than the citywide median. The CDTA with the highest number of chemically intensive small businesses is `r cdta |> arrange(desc(chem_count)) |> slice(1) |> pull(CDTAName) |> str_split_i(" ", 2)`.
+
+```{r}
+ggplot(cdta) + 
+  geom_col(aes(x = fct_reorder(CDTA2020, chem_count), 
+               y = chem_count,
+               fill = BoroCode == 4)) +
+  geom_hline(yintercept = median(cdta$chem_count),
+             linetype = "dashed", colour = "#ea4943") +
+  theme(
+    panel.background   = element_blank(),
+    panel.grid.major.x = element_blank(),
+    panel.grid.minor.x = element_blank(),
+    panel.grid.minor.y = element_line(colour = "#ebebeb"),
+    panel.grid.major.y = element_line(colour = "#ebebeb"),
+    axis.text.x = element_text(angle = 90, hjust = 1, vjust = 0.5)
+    )+
+  labs(title = "Chemically Intensive Small Businesses in CDTAs", x = "CDTA", y = "Count") +
+  annotate("text", x = 1, y = median(cdta$chem_count),
+           label = "Citywide median", colour = "#ea4943",
+           hjust = 0, vjust = -0.6, size = 3) +
+  boro_fill
+
+```
+
+The second dataset contains the locations of Fuel Oil / Hazardous Waste Material Storage sites across the city[^6]. These data come from the  EPA's Resource Conservation and Recovery Act biennial report. There are `r nrow(hazmat_storage)` sites citywide.Counting sites per district gives a range of `r min(cdta$hazmat_count)` to `r max(cdta$hazmat_count)`; in Queens the range is `r min(cdta[cdta$BoroCode==4,]$hazmat_count)` to `r max(cdta[cdta$BoroCode==4,]$hazmat_count)`. Sites are mapped below:
+
+```{r}
+#| message: false
+#| warning: false
+
+# Compute quintiles for choropleth map
+hazmat_breaks <- quantile(cdta$hazmat_count, probs = seq(0, 1, 0.2), type = 1)
+hazmat_colors <- colorRampPalette(c("grey80", "#efd1cc", "#db7a6b", "#a44132"))(5)
+
+# Bin labels based on breaks
+bin_low  <- c(min(cdta$hazmat_count), unname(hazmat_breaks[2:5]))
+bin_high <- c(unname(hazmat_breaks[2:5]) - 1, max(cdta$hazmat_count))
+bin_labels <- ifelse(bin_low == bin_high, bin_low, paste0(bin_low, "–", bin_high))
+
+# HTML popups
+hazmat_sites <- hazmat_storage |>
+  mutate(hazmat_popup = paste0("<strong>", HANDLER_NA, "</strong><br/>", TOP3))
+
+maplibre(bounds = cdta,
+         style = carto_style("positron")) |>
+  add_fill_layer(
+    id = "hazmat-count",
+    source = cdta,
+    fill_color = step_expr(
+      column = "hazmat_count",
+      base   = hazmat_colors[1],
+      values = unname(hazmat_breaks[2:5]),
+      stops  = hazmat_colors[-1]
+    ),
+    fill_opacity = 0.85,
+    fill_outline_color = "#ffffff",
+    popup = "CDTAName"
+  ) |>
+  add_circle_layer(
+    id = "hazmat-sites",
+    source = hazmat_sites,
+    circle_color = "#0b0b0b",
+    circle_radius = 4,
+    circle_stroke_color = "#ffffff",
+    circle_stroke_width = 1,
+    popup = "hazmat_popup"
+  ) |>
+  add_legend(
+    "Hazmat sites per CDTA",
+    values = bin_labels,
+    colors = hazmat_colors,
+    type = "categorical",
+    style = list(
+      background_color = "#fefcfa",
+      backgroud_opacity = 0.8
+    )
+  )
+```
+
+Hazmat location count by CDTA:
+```{r}
+ggplot(cdta) + 
+  geom_col(aes(x = fct_reorder(CDTA2020, hazmat_count), 
+               y = hazmat_count,
+               fill = BoroCode == 4)) +
+  geom_hline(yintercept = median(cdta$hazmat_count),
+             linetype = "dashed", colour = "#ea4943") +
+  theme(
+    panel.background   = element_blank(),
+    panel.grid.major.x = element_blank(),
+    panel.grid.minor.x = element_blank(),
+    panel.grid.minor.y = element_line(colour = "#ebebeb"),
+    panel.grid.major.y = element_line(colour = "#ebebeb"),
+    axis.text.x = element_text(angle = 90, hjust = 1, vjust = 0.5)
+    )+
+  labs(title = "Hazmat storage locations in CDTAs", x = "CDTA", y = "Count") +
+  annotate("text", x = 1, y = median(cdta$hazmat_count),
+           label = "Citywide median", colour = "#ea4943",
+           hjust = 0, vjust = -0.6, size = 3) + 
+  boro_fill
+```
+
+
+
+[^5]: [Chemically Intensive Small Businesses](https://services3.arcgis.com/A6Zjpzrub8ESZ3c7/arcgis/rest/services/Chemically%20Intensive%20Small%20Businesses_3/FeatureServer/0)
+
+[^6]: [EPA RCA Fuel Oil Storage](https://services6.arcgis.com/yG5s3afENB5iO9fj/arcgis/rest/services/EPA_RCA_Fuel_Oil_Storage/FeatureServer/0)
+
+## Infectious Disease
+
+The 2024 JRA also references DOHMH's Pandemic Influenza Vulnerability Index, is produced by analyzing potential exposure, susceptibility, and access to treatment at the Community District Level[^7]. Note that Queens CDTAs have PIVI values of 1 or 2 (out of 5):
+
+[^7]: [Pandemic Influenza Vulnerability Index](https://services1.arcgis.com/8cuieNI8NbqQZQVJ/arcgis/rest/services/Pandemic_Influenza_Vulnerability_Index/FeatureServer/0)
+
+```{r}
+ggplot(cdta) + 
+  geom_col(aes(x = fct_reorder(CDTA2020, PIVI), 
+               y = PIVI,
+               fill = BoroCode == 4)) +
+  geom_hline(yintercept = median(cdta$PIVI),
+             linetype = "dashed", colour = "#ea4943") +
+  theme(
+    panel.background   = element_blank(),
+    panel.grid.major.x = element_blank(),
+    panel.grid.minor.x = element_blank(),
+    panel.grid.minor.y = element_line(colour = "#ebebeb"),
+    panel.grid.major.y = element_line(colour = "#ebebeb"),
+    axis.text.x = element_text(angle = 90, hjust = 1, vjust = 0.5)
+    )+
+  labs(title = "Pandemic Influenza Vulnerability Index in CDTAs", x = "CDTA", y = "Count") +
+  annotate("text", x = 1, y = median(cdta$PIVI),
+           label = "Citywide median", colour = "#ea4943",
+           hjust = 0, vjust = -0.6, size = 3) +
+  boro_fill
+```
+
+
+# Hazard Ranking
+
+As three of the five rankable hazards (coastal storm, extreme heat, infectious disease) are described using a 1 -5 vulnerability index, an initial approach to ranking the disparate hazards is to express the other two  (heavy rain, hazmat/chemical) in terms of quintiles denoted 1 -5. As a simplification, the count of hazmat and fuel oil storage sites per CDTA may be added to the count of chemically intensive small businesses per CDTA. For the purposes of district-level hazard ranking, districts not exposed to coastal storm surge are assigned an FVI value of 0 rather than `NA`.
+
+```{r}
+# Create quintile columns
+cdta <- cdta |> 
+  # Add hazmat and chemically intensive small businesses first
+  mutate(hazmat_chem_count = hazmat_count + chem_count) |>
+  mutate(
+    sw_quintile = cut(
+      stormwater_pct,
+      breaks = quantile(stormwater_pct, probs = seq(0,1,0.2)),
+      labels = FALSE,
+      include.lowest = TRUE
+    ),
+    hazmat_quintile = cut(
+      hazmat_chem_count,
+      breaks = quantile(hazmat_chem_count, probs = seq(0,1,0.2)),
+      labels = FALSE,
+      include.lowest = TRUE
+    )
+  )
+```
+
+The resulting quintile ranks for stormwater flooding:
+```{r}
+ggplot(cdta) + 
+  geom_col(aes(x = fct_reorder(CDTA2020, sw_quintile), 
+               y = sw_quintile,
+               fill = BoroCode == 4)) +
+  geom_hline(yintercept = median(cdta$sw_quintile),
+             linetype = "dashed", colour = "#ea4943") +
+  theme(
+    panel.background   = element_blank(),
+    panel.grid.major.x = element_blank(),
+    panel.grid.minor.x = element_blank(),
+    panel.grid.minor.y = element_line(colour = "#ebebeb"),
+    panel.grid.major.y = element_line(colour = "#ebebeb"),
+    axis.text.x = element_text(angle = 90, hjust = 1, vjust = 0.5)
+    )+
+  labs(title = "Stormwater Flooding Quintile Rank in CDTAs", x = "CDTA", y = "Count") +
+  annotate("text", x = 1, y = median(cdta$sw_quintile),
+           label = "Citywide median", colour = "#ea4943",
+           hjust = 0, vjust = -0.6, size = 3) +
+  boro_fill
+```
+
+And the combined hazmat / chemically intensive small business count:
+```{r}
+ggplot(cdta) + 
+  geom_col(aes(x = fct_reorder(CDTA2020, hazmat_quintile), 
+               y = hazmat_quintile,
+               fill = BoroCode == 4)) +
+  geom_hline(yintercept = median(cdta$hazmat_quintile),
+             linetype = "dashed", colour = "#ea4943") +
+  theme(
+    panel.background   = element_blank(),
+    panel.grid.major.x = element_blank(),
+    panel.grid.minor.x = element_blank(),
+    panel.grid.minor.y = element_line(colour = "#ebebeb"),
+    panel.grid.major.y = element_line(colour = "#ebebeb"),
+    axis.text.x = element_text(angle = 90, hjust = 1, vjust = 0.5)
+    )+
+  labs(title = "Hazmat / Chemically Intestive Small Business Quintile Rank in CDTAs", x = "CDTA", y = "Count") +
+  annotate("text", x = 1, y = median(cdta$hazmat_quintile),
+           label = "Citywide median", colour = "#ea4943",
+           hjust = 0, vjust = -0.6, size = 3) +
+  boro_fill
+```
+
+```{r}
+hazard_names <- c(
+  sw_quintile     = "Heavy Rain",
+  max_ss_cur_fvi  = "Coastal Storm",
+  HVI             = "Extreme Heat",
+  hazmat_quintile = "Hazmat / Chemical",
+  PIVI            = "Infectious Disease"
+)
+
+
+
+ranked <- cdta |> 
+  st_drop_geometry() |> 
+  filter(BoroCode == 4) |> 
+  mutate(max_ss_cur_fvi = replace_na(max_ss_cur_fvi, 0)) |> 
+  select(CDTA2020, max_ss_cur_fvi, HVI, PIVI, sw_quintile, hazmat_quintile) |> 
+  pivot_longer(-CDTA2020, names_to = "hazard", values_to = "score") |>
+  mutate(hazard = recode(hazard, !!!hazard_names)) |>
+  arrange(CDTA2020, desc(score), hazard) |>
+  mutate(rank  = paste("Rank", row_number()),
+         label = paste0(hazard, " (", score, ")"), .by = CDTA2020) |>
+  pivot_wider(id_cols = CDTA2020, names_from = rank, values_from = label) |> 
+  rename(CDTA = CDTA2020)
+
+# One tint per hazard, all at ~88% lightness so no category outweighs another.
+# Heavy Rain and Hazmat carry the blue and red already used by the choropleths.
+hazard_fill <- c(
+  "Heavy Rain"         = "#d1ddee",
+  "Hazmat / Chemical"  = "#efd1cc",
+  "Extreme Heat"       = "#f3f0ce",
+  "Infectious Disease" = "#cef3da",
+  "Coastal Storm"      = "#eecef3"
+)
+
+# Cells read "Heavy Rain (5)", so the tints are re-keyed onto the labels the
+# table actually holds -- built from the data so a new score can't miss a colour.
+rank_labels <- unique(unlist(ranked[-1]))
+label_fill <- setNames(
+  unname(hazard_fill[sub(" \\(.*\\)$", "", rank_labels)]),
+  rank_labels
+)
+
+cil_table(ranked,
+          full_height = TRUE,
+          fill = label_fill
+          )
+
+
+```
+
+Considerations based on this initial ranking:
+
+1. **Queens has many chemically intensive small businesses compared to other boroughs.** This comes across in the rankings, where 11 of 14 Queens districts have Hazmat/Chemical ranked in position 1 or 2.
+2. **Queens is less vulnerable to infectious disease than other boroughs**. The only districts that do not have infectious disease ranked last are those Queens districts which are not exposed to coastal storm surge. All Queens districts have a PIVI score of 1 or 2. 
+
+We may then, ask what the ranking looks among only heavy rain, coastal storm, and extreme heat:
+
+```{r}
+hazard_names_3 <- c(
+  sw_quintile     = "Heavy Rain",
+  max_ss_cur_fvi  = "Coastal Storm",
+  HVI             = "Extreme Heat"
+)
+
+ranked_3 <- cdta |> 
+  st_drop_geometry() |> 
+  filter(BoroCode == 4) |> 
+  mutate(max_ss_cur_fvi = replace_na(max_ss_cur_fvi, 0)) |> 
+  select(CDTA2020, max_ss_cur_fvi, HVI, sw_quintile) |> 
+  pivot_longer(-CDTA2020, names_to = "hazard", values_to = "score") |>
+  mutate(hazard = recode(hazard, !!!hazard_names_3)) |>
+  arrange(CDTA2020, desc(score), hazard) |>
+  mutate(rank  = paste("Rank", row_number()),
+         label = paste0(hazard, " (", score, ")"), .by = CDTA2020) |>
+  pivot_wider(id_cols = CDTA2020, names_from = rank, values_from = label) |> 
+  rename(CDTA = CDTA2020)
+
+hazard_fill_3 <- c(
+  "Heavy Rain"         = "#d1ddee",
+  "Extreme Heat"       = "#f3f0ce",
+  "Coastal Storm"      = "#eecef3"
+)
+
+rank_labels_3 <- unique(unlist(ranked_3[-1]))
+label_fill_3 <- setNames(
+  unname(hazard_fill[sub(" \\(.*\\)$", "", rank_labels_3)]),
+  rank_labels_3
+)
+
+cil_table(ranked_3,
+          full_height = TRUE,
+          fill = label_fill_3
+          )
+```
+
+This second ranking highlights the need for hazard prioritization in the case of tied scores between hazards. One approach would be to consider geographic specificity. Coastal storm threat would come first, as it is the only hazard that is not city-wide. Next comes heavy rain, which is a citywide concern, but only of concern in specific areas that experience stormwater flooding. Last, then, would be extreme heat, whose spatial distribution is heterogeneous, but less acutely so than the other two threats, at least in terms of the physical environment. 
+
+```{r}
+hazard_names_3 <- c(
+  sw_quintile     = "Heavy Rain",
+  max_ss_cur_fvi  = "Coastal Storm",
+  HVI             = "Extreme Heat"
+)
+
+hazard_priority_3 <- c("Coastal Storm", "Heavy Rain", "Extr
+eme Heat")
+
+ranked_3 <- cdta |> 
+  st_drop_geometry() |> 
+  filter(BoroCode == 4) |> 
+  mutate(max_ss_cur_fvi = replace_na(max_ss_cur_fvi, 0)) |> 
+  select(CDTA2020, max_ss_cur_fvi, HVI, sw_quintile) |> 
+  pivot_longer(-CDTA2020, names_to = "hazard", values_to = "score") |>
+  mutate(hazard = recode(hazard, !!!hazard_names_3)) |>
+  arrange(CDTA2020, desc(score), match(hazard, hazard_priority_3)) |>
+  mutate(rank  = paste("Rank", row_number()),
+         label = paste0(hazard, " (", score, ")"), .by = CDTA2020) |>
+  pivot_wider(id_cols = CDTA2020, names_from = rank, values_from = label) |> 
+  rename(CDTA = CDTA2020)
+
+hazard_fill_3 <- c(
+  "Heavy Rain"         = "#d1ddee",
+  "Extreme Heat"       = "#f3f0ce",
+  "Coastal Storm"      = "#eecef3"
+)
+
+rank_labels_3 <- unique(unlist(ranked_3[-1]))
+label_fill_3 <- setNames(
+  unname(hazard_fill[sub(" \\(.*\\)$", "", rank_labels_3)]),
+  rank_labels_3
+)
+
+cil_table(ranked_3,
+          full_height = TRUE,
+          fill = label_fill_3
+          )
+```
+
+The remaining hazard categories would then be pinned based on subject matter expert feedback, e.g.:
+
+1. Ranked
+2. Ranked
+3. Ranked 
+4. **Hazmat / Chemical**
+5. **Infectious Disease**
+6. **Extreme Cold**
+7. **Mass Casualty / Active Shooter Event**
+8. **Blackout / Cyberattack (EMP)**
