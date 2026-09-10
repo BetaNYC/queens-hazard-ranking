@@ -648,7 +648,9 @@ ggplot(cdta) +
 
 # Hazard Ranking
 
-As three of the five rankable hazards (coastal storm, extreme heat, infectious disease) are described using a 1 -5 vulnerability index, an initial approach to ranking the disparate hazards is to express the other two  (heavy rain, hazmat/chemical) in terms of quintiles denoted 1 -5. As a simplification, the count of hazmat and fuel oil storage sites per CDTA may be added to the count of chemically intensive small businesses per CDTA. For the purposes of district-level hazard ranking, districts not exposed to coastal storm surge are assigned an FVI value of 0 rather than `NA`.
+As three of the five rankable hazards (coastal storm, extreme heat, infectious disease) are described using a 1 -5 vulnerability index, an initial approach to ranking the disparate hazards is to express the other two  (heavy rain, hazmat/chemical) in terms of quintiles denoted 1 -5. As a simplification, the count of hazmat and fuel oil storage sites per CDTA may be added to the count of chemically intensive small businesses. For the purposes of district-level hazard ranking, districts not exposed to coastal storm surge are assigned an FVI value of 0 rather than `NA`. 
+
+The resulting quintile ranks for stormwater flooding:
 
 ```{r}
 # Create quintile columns
@@ -669,10 +671,7 @@ cdta <- cdta |>
       include.lowest = TRUE
     )
   )
-```
 
-The resulting quintile ranks for stormwater flooding:
-```{r}
 ggplot(cdta) + 
   geom_col(aes(x = fct_reorder(CDTA2020, sw_quintile), 
                y = sw_quintile,
