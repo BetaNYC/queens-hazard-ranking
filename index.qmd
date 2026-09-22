@@ -740,8 +740,6 @@ ranked <- cdta |>
   pivot_wider(id_cols = CDTA2020, names_from = rank, values_from = label) |> 
   rename(CDTA = CDTA2020)
 
-# One tint per hazard, all at ~88% lightness so no category outweighs another.
-# Heavy Rain and Hazmat carry the blue and red already used by the choropleths.
 hazard_fill <- c(
   "Heavy Rain"         = "#d1ddee",
   "Hazmat / Chemical"  = "#efd1cc",
@@ -750,8 +748,6 @@ hazard_fill <- c(
   "Coastal Storm"      = "#eecef3"
 )
 
-# Cells read "Heavy Rain (5)", so the tints are re-keyed onto the labels the
-# table actually holds -- built from the data so a new score can't miss a colour.
 rank_labels <- unique(unlist(ranked[-1]))
 label_fill <- setNames(
   unname(hazard_fill[sub(" \\(.*\\)$", "", rank_labels)]),
@@ -762,8 +758,6 @@ cil_table(ranked,
           full_height = TRUE,
           fill = label_fill
           )
-
-
 ```
 
 Considerations based on this initial ranking:
@@ -815,25 +809,39 @@ This second ranking highlights the need for hazard prioritization in the case of
 
 ```{r}
 hazard_names_3 <- c(
-  sw_quintile     = "Heavy Rain",
-  max_ss_cur_fvi  = "Coastal Storm",
-  HVI             = "Extreme Heat"
+  sw_quintile = "Heavy Rain",
+  max_ss_cur_fvi = "Coastal Storm",
+  HVI = "Extreme Heat"
 )
 
-hazard_priority_3 <- c("Coastal Storm", "Heavy Rain", "Extr
-eme Heat")
+hazard_priority_3 <- c("Coastal Storm", "Heavy Rain", "Extreme Heat")
 
 ranked_3 <- cdta |> 
   st_drop_geometry() |> 
   filter(BoroCode == 4) |> 
   mutate(max_ss_cur_fvi = replace_na(max_ss_cur_fvi, 0)) |> 
-  select(CDTA2020, max_ss_cur_fvi, HVI, sw_quintile) |> 
-  pivot_longer(-CDTA2020, names_to = "hazard", values_to = "score") |>
-  mutate(hazard = recode(hazard, !!!hazard_names_3)) |>
-  arrange(CDTA2020, desc(score), match(hazard, hazard_priority_3)) |>
+  select(CDTA2020, 
+         max_ss_cur_fvi, 
+         HVI, 
+         sw_quintile)|> 
+  pivot_longer(-CDTA2020, 
+               names_to = "hazard", 
+               values_to = "score") |>
+  mutate(hazard = recode(hazard,!!!hazard_names_3)
+         ) |>
+  arrange(CDTA2020, 
+          desc(score), 
+          match(hazard, 
+                hazard_priority_3)
+          ) |>
   mutate(rank  = paste("Rank", row_number()),
-         label = paste0(hazard, " (", score, ")"), .by = CDTA2020) |>
-  pivot_wider(id_cols = CDTA2020, names_from = rank, values_from = label) |> 
+         label = paste0(hazard, 
+                        " (", 
+                        score, ")"),
+         .by = CDTA2020) |>
+  pivot_wider(id_cols = CDTA2020, 
+              names_from = rank, 
+              values_from = label) |> 
   rename(CDTA = CDTA2020)
 
 hazard_fill_3 <- c(
